@@ -1,16 +1,26 @@
 package com.ozan.csvparser.service;
 
+import com.opencsv.exceptions.CsvValidationException;
 import com.ozan.csvparser.dto.CsvDataDto;
 import com.ozan.csvparser.entity.CsvData;
 import com.ozan.csvparser.mapper.CsvDataMapper;
+import com.ozan.csvparser.parser_exception.ResourceNotFoundException;
 import com.ozan.csvparser.repository.CsvDataRepository;
+import com.ozan.csvparser.utility.CsvDataParser;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.web.multipart.MultipartFile;
 
-import java.util.ArrayList;
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
@@ -22,6 +32,12 @@ class CsvDataServiceImplTest {
     @Mock
     private CsvDataRepository csvDataRepository;
 
+    @Mock
+    private CsvDataParser csvDataParser;
+
+    @Mock
+    private CsvDataMapper csvDataMapper;
+
     @InjectMocks
     private CsvDataServiceImpl csvDataService;
 
@@ -31,85 +47,91 @@ class CsvDataServiceImplTest {
     }
 
     @Test
-    void uploadData_ShouldSaveEntitiesAndReturnCorrectCount() {
+    void uploadData_ShouldSaveEntitiesAndLogInfo() throws IOException, CsvValidationException {
         // Arrange
-        List<CsvDataDto> csvDataList = new ArrayList<>();
-        csvDataList.add(new CsvDataDto("source1", "codeListCode1", "code1", "displayValue1",
-                "longDescription1", "fromDate1", "toDate1", "sortingPriority1"));
-        csvDataList.add(new CsvDataDto("source2", "codeListCode2", "code2", "displayValue2",
-                "longDescription2", "fromDate2", "toDate2", "sortingPriority2"));
+        MultipartFile file = new MockMultipartFile("test.csv", new byte[10]);
 
-        List<CsvData> expectedEntities = CsvDataMapper.CSV_DATA_MAPPER.toEntityList(csvDataList);
+        List<CsvDataDto> csvDataDtoList = Collections.singletonList(new CsvDataDto());
+        List<CsvData> entities = Collections.singletonList(new CsvData());
+
+        when(csvDataParser.parseCsvFile(file)).thenReturn(csvDataDtoList);
+        when(csvDataMapper.toEntity(any(CsvDataDto.class))).thenReturn(new CsvData());
 
         // Act
-        csvDataService.uploadData(csvDataList);
+        csvDataService.uploadData(file);
 
         // Assert
-        verify(csvDataRepository, times(1)).saveAll(expectedEntities);
+        verify(csvDataRepository, times(1)).saveAll(entities);
+        verify(csvDataParser, times(1)).parseCsvFile(file);
     }
 
     @Test
-    void getAllData_ShouldReturnAllDataAsDtos() {
+    void getAllData_ShouldReturnCsvDataAsResponseEntity() {
         // Arrange
-        List<CsvData> mockData = new ArrayList<>();
-        mockData.add(new CsvData(1, "source1", "codeListCode1", "code1", "displayValue1",
-                "longDescription1", "fromDate1", "toDate1", "sortingPriority1"));
-        mockData.add(new CsvData(2, "source2", "codeListCode2", "code2", "displayValue2",
-                "longDescription2", "fromDate2", "toDate2", "sortingPriority2"));
+        List<CsvData> allData = Arrays.asList(new CsvData(), new CsvData());
+        List<CsvDataDto> dtos = Arrays.asList(new CsvDataDto(), new CsvDataDto());
 
-        when(csvDataRepository.findAll()).thenReturn(mockData);
-
-        List<CsvDataDto> expectedDtos = CsvDataMapper.CSV_DATA_MAPPER.toDtoList(mockData);
+        when(csvDataRepository.findAll()).thenReturn(allData);
+        when(csvDataMapper.toDto(any(CsvData.class))).thenReturn(new CsvDataDto());
+        when(csvDataParser.convertToCsvBytes(dtos)).thenReturn(new byte[0]);
 
         // Act
-        List<CsvDataDto> result = csvDataService.getAllData();
+        ResponseEntity<byte[]> response = csvDataService.getAllData();
 
         // Assert
-        assertEquals(expectedDtos.size(), result.size());
-        for (int i = 0; i < expectedDtos.size(); i++) {
-            CsvDataDto expectedDto = expectedDtos.get(i);
-            CsvDataDto actualDto = result.get(i);
-            assertEquals(expectedDto.getCode(), actualDto.getCode());
-            // Add assertions for other fields
-        }
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(MediaType.parseMediaType("text/csv"), response.getHeaders().getContentType());
+        assertEquals("form-data; name=\"attachment\"; filename=\"entity.csv\"", response.getHeaders().getContentDisposition().toString());
+        verify(csvDataRepository, times(1)).findAll();
+        verify(csvDataParser, times(1)).convertToCsvBytes(dtos);
     }
 
     @Test
-    void getDataByCode_WithExistingCode_ShouldReturnDto() {
+    void getAllData_WithEmptyData_ShouldThrowResourceNotFoundException() {
+        // Arrange
+        when(csvDataRepository.findAll()).thenThrow(new ResourceNotFoundException("Error"));
+
+        // Act and Assert
+        assertThrows(ResourceNotFoundException.class, () -> csvDataService.getAllData());
+        verify(csvDataRepository, times(1)).findAll();
+    }
+
+    @Test
+    void getDataByCode_WithExistingCode_ShouldReturnCsvDataAsResponseEntity() throws ResourceNotFoundException {
         // Arrange
         String code = "code1";
-        CsvData mockData = new CsvData(
-                1, "source1", "codeListCode1", "code1", "displayValue1",
-                "longDescription1", "fromDate1", "toDate1", "sortingPriority1");
 
-        when(csvDataRepository.findByCode(code)).thenReturn(Optional.of(mockData));
+        CsvData csvData = new CsvData();
+        CsvDataDto csvDataDto = new CsvDataDto();
 
-        CsvDataDto expectedDto = CsvDataMapper.CSV_DATA_MAPPER.toDto(mockData);
+        when(csvDataRepository.findByCode(code)).thenReturn(Optional.of(csvData));
+        when(csvDataMapper.toDto(csvData)).thenReturn(csvDataDto);
+        when(csvDataParser.convertToCsvBytes(Collections.singletonList(csvDataDto))).thenReturn(new byte[10]);
 
         // Act
-        Optional<CsvDataDto> result = csvDataService.getDataByCode(code);
+        byte[] response = csvDataService.getDataByCode(code);
 
         // Assert
-        assertTrue(result.isPresent());
-        assertEquals(expectedDto.getCode(), result.get().getCode());
-        // Add assertions for other fields
+        assertTrue(response.length != 0);
+        verify(csvDataRepository, times(1)).findByCode(code);
+        verify(csvDataParser, times(1)).convertToCsvBytes(Collections.singletonList(csvDataDto));
     }
 
     @Test
-    void getDataByCode_WithNonExistingCode_ShouldReturnEmptyOptional() {
+    void getDataByCode_WithNonExistingCode_ShouldThrowResourceNotFoundException() {
         // Arrange
         String code = "nonExistingCode";
+
         when(csvDataRepository.findByCode(code)).thenReturn(Optional.empty());
 
-        // Act
-        Optional<CsvDataDto> result = csvDataService.getDataByCode(code);
-
-        // Assert
-        assertFalse(result.isPresent());
+        // Act and Assert
+        assertThrows(ResourceNotFoundException.class, () -> csvDataService.getDataByCode(code));
+        verify(csvDataRepository, times(1)).findByCode(code);
+        verify(csvDataParser, never()).convertToCsvBytes(anyList());
     }
 
     @Test
-    void deleteAllData_ShouldCallRepositoryDeleteAll() {
+    void deleteAllData_ShouldCallRepositoryDeleteAllAndLogInfo() {
         // Act
         csvDataService.deleteAllData();
 

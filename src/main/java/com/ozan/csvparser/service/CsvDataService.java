@@ -1,16 +1,17 @@
 package com.ozan.csvparser.service;
 
-import com.ozan.csvparser.dto.CsvDataDto;
+import com.opencsv.exceptions.CsvValidationException;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.multipart.MultipartFile;
 
-import java.util.List;
-import java.util.Optional;
+import java.io.IOException;
 
 public interface CsvDataService {
-    void uploadData(List<CsvDataDto> csvDataDtoList);
+    void uploadData(MultipartFile file) throws CsvValidationException, IOException;
 
-    List<CsvDataDto> getAllData();
+    ResponseEntity<byte[]> getAllData();
 
-    Optional<CsvDataDto> getDataByCode(String code);
+    byte[] getDataByCode(String code);
 
     void deleteAllData();
 }
